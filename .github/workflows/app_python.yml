@@ -1,0 +1,103 @@
+name: Python application
+
+on:
+  push:
+    paths:
+      - "app_python/**"
+      - ".github/workflows/app_python.yaml"
+
+defaults:
+  run:
+    working-directory: app_python
+
+jobs:
+
+  linter_and_tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        python-version: [ "3.10" ]
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          cache: 'pip'
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Intalling linter (pylint)
+        uses: cclauss/GitHub-Action-for-pylint@0.7.0
+
+      - name: Running linter (pylint)
+        run: |
+          find . -name '*.py' -exec pylint {} \;
+
+      - name: Running tests
+        run: |
+          python manage.py test
+
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        python-version: [ "3.10" ]
+    steps:
+      - uses: actions/checkout@master
+      - uses: snyk/actions/setup@master
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          cache: 'pip'
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Snyk to check for vulnerabilities
+        run: |
+          snyk test --sarif-file-output=snyk.sarif
+        continue-on-error: true
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
+      - name: Upload result to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: app_python/snyk.sarif
+
+  docker-container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: ["linter_and_tests", "security"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v1
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v1
+
+      - name: Build and push
+        uses: docker/build-push-action@v2
+        with:
+          context: app_python
+          push: true
+          tags: ${{ secrets.DOCKER_HUB_USERNAME }}/django-iu-lab:latest
+          cache-from: type=registry,ref=${{ secrets.DOCKER_HUB_USERNAME }}/django-iu-lab:buildcache
+          cache-to: type=registry,ref=${{ secrets.DOCKER_HUB_USERNAME }}/django-iu-lab:buildcache,mode=max
